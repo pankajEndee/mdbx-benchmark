@@ -1,0 +1,19 @@
+# Build output
+build/
+cmake-build-*/
+
+# Benchmark output
+results/
+bench_db/
+bench_db_*/
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+
+# Compile commands
+compile_commands.json
+.cache/
