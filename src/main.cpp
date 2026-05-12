@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <unistd.h>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -24,7 +25,7 @@ struct CliOptions {
     std::string db_path     = "./bench_db";
     std::string out_dir     = "./results";
     std::string run_id;
-    size_t      map_size_gb = 64;
+    size_t      map_size_gb = 128;
     int         writemap    = 1;
     int         nordahead   = 1;
     int         liforeclaim = 1;
@@ -164,7 +165,7 @@ void run_load_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
     auto hist = maybe_hist(o, meta, "load");
     struct V { size_t batch; bool append; };
     std::vector<V> variants = {
-        {100000, true}
+        {10000, false}
         // {1000,   false},
         // {10000,  true},
         // {100000, true},
@@ -198,7 +199,7 @@ void run_read_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta,
         cfg.pattern        = v.pat;
         cfg.thread_count   = v.threads;
         cfg.cross_dbi      = v.cross_dbi;
-        cfg.ops_per_thread = o.ops.value_or(1'000'000);
+        cfg.ops_per_thread = o.ops.value_or(10'000'000);
         run_point_reads(h, cfg, phase_name, csv, hist.get());
     }
 }
@@ -264,7 +265,7 @@ int main(int argc, char** argv) try {
 
     auto run_one = [&](const std::string& p) {
         if (p == "load")       run_load_phase(h, o, meta);
-        else if (p == "hot_read")  run_read_phase(h, o, meta, "hot_read");
+        else if (p == "hot_read")  {run_warmup(h); run_read_phase(h, o, meta, "hot_read");}
         else if (p == "cold_read") run_read_phase(h, o, meta, "cold_read");
         else if (p == "mixed")     run_mixed_phase(h, o, meta);
         else if (p == "txn")       run_txn_phase(h, o, meta);
@@ -277,16 +278,25 @@ int main(int argc, char** argv) try {
 
     if (o.phase == "all") {
         if (!o.no_load) run_load_phase(h, o, meta);
+        run_warmup(h);
         run_read_phase(h, o, meta, "hot_read");
 
-        std::cerr << "\n=== Cold-read setup ===\n"
-                     "To make the cold-read phase genuinely cold, run as root:\n"
-                     "    sync && echo 3 > /proc/sys/vm/drop_caches\n";
-        //              "Press Enter to continue with cold reads...\n";
-        // std::string line;
-        // std::getline(std::cin, line);
-
+        std::cerr << "\n=== Cold-read setup ===\n";
         close_env(h);
+
+        // Actually drop OS page cache so cold_read is cold. Requires either
+        // running as root, or `sudo` configured for passwordless `tee` / sysctl.
+        // sync() flushes dirty pages so they can be dropped.
+        ::sync();
+        int dc = std::system("echo 3 | sudo -n tee /proc/sys/vm/drop_caches > /dev/null");
+        if (dc != 0) {
+            std::cerr << "[cold_read] WARNING: failed to drop caches (rc=" << dc
+                      << "). Cold reads will actually be warm. "
+                      << "Run as root or configure passwordless sudo for tee.\n";
+        } else {
+            std::cerr << "[cold_read] page cache dropped\n";
+        }
+
         h = open_env(env_cfg);
         run_read_phase(h, o, meta, "cold_read");
 

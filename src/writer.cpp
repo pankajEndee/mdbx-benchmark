@@ -27,7 +27,11 @@ void mixed_reader_thread(EnvHandle& h, const MixedConfig& cfg,
     while (!st.stop_requested()) {
         size_t ks = SCHEMA[dbi_idx].key_size;
         uint64_t key_seq = rng() % max_key;
-        make_key_seq(key_buf, ks, key_seq % SCHEMA[dbi_idx].record_count);
+        uint64_t k_seq = key_seq % SCHEMA[dbi_idx].record_count;
+        if (SCHEMA[dbi_idx].flags & MDBX_INTEGERKEY)
+            make_key_int(key_buf, ks, k_seq);
+        else
+            make_key_seq(key_buf, ks, k_seq);
         mdbx::slice k(key_buf, ks);
         static const mdbx::slice kAbsent{};
         Timer t;
@@ -87,7 +91,10 @@ void run_mixed(EnvHandle& h, const MixedConfig& cfg,
             for (size_t r = 0; r < per_dbi; ++r) {
                 uint64_t key_seq = spec.record_count + (txn_i * per_dbi + r);
                 uint64_t rk = rng();
-                make_key_seq(key_buf, spec.key_size, key_seq ^ rk);
+                if (spec.flags & MDBX_INTEGERKEY)
+                    make_key_int(key_buf, spec.key_size, key_seq ^ rk);
+                else
+                    make_key_seq(key_buf, spec.key_size, key_seq ^ rk);
                 make_val(val_buf.data(), spec.val_size, key_seq);
                 mdbx::slice k(key_buf, spec.key_size);
                 mdbx::slice v(val_buf.data(), spec.val_size);

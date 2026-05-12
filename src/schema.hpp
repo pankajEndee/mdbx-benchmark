@@ -29,10 +29,7 @@ inline constexpr DBISpec SCHEMA[] = {
 inline constexpr size_t DBI_COUNT = sizeof(SCHEMA) / sizeof(SCHEMA[0]);
 
 // Writes `seq` into `buf` in big-endian order, right-aligned to `key_size`.
-// If key_size > 8 the high bytes are zero-padded; if key_size < 8 the
-// high bytes of `seq` that don't fit are dropped (so callers must keep
-// `seq < 2^(8*key_size)` for unique keys). This preserves lexicographic
-// order so MDBX_APPEND works for monotonically increasing seq.
+// Preserves lexicographic order so MDBX_APPEND works for monotonically increasing seq.
 inline void make_key_seq(uint8_t *buf, size_t key_size, uint64_t seq)
 {
     std::memset(buf, 0, key_size);
@@ -40,6 +37,18 @@ inline void make_key_seq(uint8_t *buf, size_t key_size, uint64_t seq)
     for (size_t i = 0; i < n; ++i)
     {
         buf[key_size - 1 - i] = static_cast<uint8_t>(seq >> (8 * i));
+    }
+}
+
+// Writes `seq` into `buf` as a native-endian integer — required for MDBX_INTEGERKEY DBIs.
+// key_size must be 4 or 8.
+inline void make_key_int(uint8_t *buf, size_t key_size, uint64_t seq)
+{
+    if (key_size == 4) {
+        uint32_t v = static_cast<uint32_t>(seq);
+        std::memcpy(buf, &v, 4);
+    } else {
+        std::memcpy(buf, &seq, 8);
     }
 }
 

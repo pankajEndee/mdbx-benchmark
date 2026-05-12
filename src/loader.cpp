@@ -34,7 +34,10 @@ void run_bulk_load(EnvHandle& h, const LoadConfig& cfg, CsvWriter& csv,
 
             for (size_t b = 0; b < batch; ++b) {
                 uint64_t seq = written + b;
-                make_key_seq(key_buf, spec.key_size, seq);
+                if (spec.flags & MDBX_INTEGERKEY)
+                    make_key_int(key_buf, spec.key_size, seq);
+                else
+                    make_key_seq(key_buf, spec.key_size, seq);
                 make_val(val_buf.data(), spec.val_size, seq);
                 mdbx::slice k(key_buf, spec.key_size);
                 mdbx::slice v(val_buf.data(), spec.val_size);

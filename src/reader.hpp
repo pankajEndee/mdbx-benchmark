@@ -26,3 +26,6 @@ struct ReadConfig {
 // phase_name selects "hot_read" or "cold_read" output file (caller owns CsvWriter).
 void run_point_reads(EnvHandle& h, const ReadConfig& cfg, const std::string& phase_name,
                      CsvWriter& csv, CsvWriter* hist_csv = nullptr);
+
+// Sequential full scan over all DBIs to warm the OS page cache before hot reads.
+void run_warmup(EnvHandle& h);

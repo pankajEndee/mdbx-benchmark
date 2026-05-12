@@ -38,9 +38,13 @@ static mdbx::env_managed open_one(const std::string& path,
                                   unsigned max_maps) {
     std::filesystem::create_directories(path);
     mdbx::env_managed::create_parameters cp;
-    cp.geometry.make_dynamic(
-        mdbx::env_managed::geometry::minimal_value,
-        map_size);
+    static constexpr size_t kMaxMapSize  = size_t(128) * 1024 * 1024 * 1024;
+    static constexpr size_t kInitialSize = size_t(1)   * 1024 * 1024 * 1024;
+    static constexpr size_t kGrowthStep  = size_t(1)   * 1024 * 1024 * 1024;
+    size_t upper = std::min(map_size, kMaxMapSize);
+    cp.geometry.make_dynamic(kInitialSize, upper);
+    cp.geometry.size_lower = mdbx::env_managed::geometry::default_value;
+    cp.geometry.growth_step = kGrowthStep;
     cp.geometry.pagesize = mdbx::env_managed::geometry::default_value;
     cp.use_subdirectory = true;
     auto op = make_op_params(cfg, max_maps);

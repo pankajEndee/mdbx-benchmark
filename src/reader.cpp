@@ -62,19 +62,35 @@ void reader_thread(EnvHandle& h, const ReadConfig& cfg, unsigned tid,
             Timer t;
             for (size_t i = 0; i < DBI_COUNT; ++i) {
                 size_t ks = SCHEMA[i].key_size;
-                make_key_seq(key_buf, ks, key_seq % SCHEMA[i].record_count);
+                uint64_t k_seq = key_seq % SCHEMA[i].record_count;
+                if (SCHEMA[i].flags & MDBX_INTEGERKEY)
+                    make_key_int(key_buf, ks, k_seq);
+                else
+                    make_key_seq(key_buf, ks, k_seq);
                 mdbx::slice k(key_buf, ks);
-                (void)txn_for(i).get(h.dbis[i], k, kAbsent);
+                auto val = txn_for(i).get(h.dbis[i], k, kAbsent);
+                if (val.data()) {
+                    volatile uint8_t x = *reinterpret_cast<const uint8_t*>(val.data());
+                    (void)x;
+                }
             }
             out_hist.record(t.elapsed_ns());
         } else {
             // Single-DBI read: rotate DBIs by thread for variety.
             size_t dbi_idx = tid % DBI_COUNT;
             size_t ks = SCHEMA[dbi_idx].key_size;
-            make_key_seq(key_buf, ks, key_seq % SCHEMA[dbi_idx].record_count);
+            uint64_t k_seq = key_seq % SCHEMA[dbi_idx].record_count;
+            if (SCHEMA[dbi_idx].flags & MDBX_INTEGERKEY)
+                make_key_int(key_buf, ks, k_seq);
+            else
+                make_key_seq(key_buf, ks, k_seq);
             mdbx::slice k(key_buf, ks);
             Timer t;
-            (void)txn_for(dbi_idx).get(h.dbis[dbi_idx], k, kAbsent);
+            auto val = txn_for(dbi_idx).get(h.dbis[dbi_idx], k, kAbsent);
+            if (val.data()) {
+                volatile uint8_t x = *reinterpret_cast<const uint8_t*>(val.data());
+                (void)x;
+            }
             out_hist.record(t.elapsed_ns());
         }
 
@@ -96,6 +112,28 @@ void reader_thread(EnvHandle& h, const ReadConfig& cfg, unsigned tid,
 }
 
 } // namespace
+
+void run_warmup(EnvHandle& h) {
+    std::cerr << "[warmup] faulting all DB pages into RAM\n";
+    // Split into two calls: mlock2(MLOCK_ONFAULT) runs first inside a combined
+    // call and if it fails (e.g. RLIMIT_MEMLOCK too small) sets rc=ENOMEM,
+    // which causes the force-touch to be skipped entirely. By separating them,
+    // the force-touch always runs regardless of mlock availability.
+    constexpr MDBX_warmup_flags_t kForce = static_cast<MDBX_warmup_flags_t>(
+        MDBX_warmup_force | MDBX_warmup_oomsafe);
+    constexpr MDBX_warmup_flags_t kLock = static_cast<MDBX_warmup_flags_t>(
+        MDBX_warmup_lock);
+    for (auto& env : h.envs) {
+        int rc = mdbx_env_warmup(env, nullptr, kForce, 0);
+        if (rc != MDBX_SUCCESS && rc != MDBX_RESULT_TRUE)
+            std::cerr << "[warmup] force-touch returned " << rc << "\n";
+        // Best-effort mlock; ENOMEM is expected when RLIMIT_MEMLOCK is small.
+        rc = mdbx_env_warmup(env, nullptr, kLock, 0);
+        if (rc != MDBX_SUCCESS && rc != MDBX_RESULT_TRUE && rc != ENOMEM)
+            std::cerr << "[warmup] mlock returned " << rc << "\n";
+    }
+    std::cerr << "[warmup] done\n";
+}
 
 void run_point_reads(EnvHandle& h, const ReadConfig& cfg,
                      const std::string& phase_name,

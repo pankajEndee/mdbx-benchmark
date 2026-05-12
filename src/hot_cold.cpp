@@ -56,7 +56,10 @@ void run_hot_cold(EnvHandle& h, const HotColdConfig& cfg, CsvWriter& csv) {
         size_t per = std::max<size_t>(1, cfg.writer_batch / DBI_COUNT);
         for (size_t r = 0; r < per; ++r) {
             uint64_t seq = spec.record_count + i * per + r;
-            make_key_seq(key_buf, spec.key_size, seq ^ rng());
+            if (spec.flags & MDBX_INTEGERKEY)
+                make_key_int(key_buf, spec.key_size, seq ^ rng());
+            else
+                make_key_seq(key_buf, spec.key_size, seq ^ rng());
             make_val(val_buf.data(), spec.val_size, seq);
             mdbx::slice k(key_buf, spec.key_size);
             mdbx::slice v(val_buf.data(), spec.val_size);

@@ -19,7 +19,10 @@ void write_dbi_records(EnvHandle& h, mdbx::txn_managed& txn,
     if (val_buf.size() < spec.val_size) val_buf.resize(spec.val_size);
     for (size_t r = 0; r < records_per_dbi; ++r) {
         uint64_t seq = spec.record_count + txn_i * records_per_dbi + r;
-        make_key_seq(key_buf, spec.key_size, seq ^ rng());
+        if (spec.flags & MDBX_INTEGERKEY)
+            make_key_int(key_buf, spec.key_size, seq ^ rng());
+        else
+            make_key_seq(key_buf, spec.key_size, seq ^ rng());
         make_val(val_buf.data(), spec.val_size, seq);
         mdbx::slice k(key_buf, spec.key_size);
         mdbx::slice v(val_buf.data(), spec.val_size);
