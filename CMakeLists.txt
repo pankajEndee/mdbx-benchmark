@@ -28,10 +28,6 @@ add_executable(mdbx_bench
   src/stats.cpp
   src/csv.cpp
   src/loader.cpp
-  src/reader.cpp
-  src/writer.cpp
-  src/txn_bench.cpp
-  src/hot_cold.cpp
 )
 target_include_directories(mdbx_bench PRIVATE src)
 target_link_libraries(mdbx_bench PRIVATE mdbx-static)

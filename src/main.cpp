@@ -1,18 +1,13 @@
 #include "csv.hpp"
 #include "env.hpp"
-#include "hot_cold.hpp"
 #include "loader.hpp"
-#include "reader.hpp"
 #include "schema.hpp"
 #include "stats.hpp"
-#include "txn_bench.hpp"
-#include "writer.hpp"
 
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
-#include <unistd.h>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -31,11 +26,7 @@ struct CliOptions {
     int         liforeclaim = 1;
     std::string sync_mode   = "safe_nosync";
     std::string layout      = "single"; // single|per_dbi
-    std::string phase       = "all";
-    std::optional<unsigned> threads;
     std::optional<size_t>   batch_size;
-    std::optional<size_t>   ops;
-    bool        no_load         = false;
     bool        dump_histograms = false;
     // Per-DBI map size overrides for per_dbi layout: "name:size_gb"
     std::vector<std::string> dbi_map_sizes;
@@ -45,12 +36,14 @@ void print_help() {
     std::cout <<
         "Usage: mdbx_bench [options]\n"
         "\n"
+        "Runs the bulk-load phase only.\n"
+        "\n"
         "Options:\n"
         "  --db-path <path>          Default: ./bench_db\n"
         "  --out-dir <path>          Directory for per-phase CSV files. Default: ./results\n"
         "  --run-id <string>         Tag written into the run_id column of every row.\n"
         "                            Default: auto-generated from sync-mode + writemap + timestamp.\n"
-        "  --map-size-gb <n>         Default: 64\n"
+        "  --map-size-gb <n>         Default: 128\n"
         "  --dbi-map-size-gb <name:n>  Per-DBI map size override for per_dbi layout.\n"
         "                            Repeatable. E.g. --dbi-map-size-gb vectors:32\n"
         "                            Unspecified DBIs fall back to even split of --map-size-gb.\n"
@@ -60,12 +53,8 @@ void print_help() {
         "  --sync-mode <s>           default|safe_nosync|utterly_nosync  Default: safe_nosync\n"
         "  --layout <s>              single|per_dbi  Default: single\n"
         "                            per_dbi opens one MDBX env per DBI; map-size is split evenly.\n"
-        "  --phase <name>            load|hot_read|cold_read|mixed|txn|hotcold|all  Default: all\n"
-        "  --threads <n>             Reader thread count override\n"
         "  --batch-size <n>          Writer batch size override\n"
-        "  --ops <n>                 Read ops per thread override\n"
-        "  --no-load                 Skip bulk load (use existing DB)\n"
-        "  --dump-histograms         Also emit <phase>_hist.csv with one row per histogram bucket\n"
+        "  --dump-histograms         Also emit load_hist.csv with one row per histogram bucket\n"
         "  --help\n";
 }
 
@@ -91,11 +80,7 @@ CliOptions parse_args(int argc, char** argv) {
         else if (a == "--liforeclaim")    o.liforeclaim = std::stoi(next_arg(i, argc, argv, "--liforeclaim"));
         else if (a == "--sync-mode")      o.sync_mode = next_arg(i, argc, argv, "--sync-mode");
         else if (a == "--layout")         o.layout = next_arg(i, argc, argv, "--layout");
-        else if (a == "--phase")          o.phase = next_arg(i, argc, argv, "--phase");
-        else if (a == "--threads")        o.threads = static_cast<unsigned>(std::stoul(next_arg(i, argc, argv, "--threads")));
         else if (a == "--batch-size")     o.batch_size = std::stoull(next_arg(i, argc, argv, "--batch-size"));
-        else if (a == "--ops")            o.ops = std::stoull(next_arg(i, argc, argv, "--ops"));
-        else if (a == "--no-load")        o.no_load = true;
         else if (a == "--dump-histograms") o.dump_histograms = true;
         else if (a == "--help" || a == "-h") { print_help(); std::exit(0); }
         else {
@@ -154,21 +139,13 @@ RunMeta make_run_meta(const CliOptions& o) {
     return m;
 }
 
-std::unique_ptr<CsvWriter> maybe_hist(const CliOptions& o, const RunMeta& meta,
-                                      const std::string& phase) {
-    if (!o.dump_histograms) return nullptr;
-    return std::make_unique<CsvWriter>(o.out_dir, phase + "_hist", meta);
-}
-
 void run_load_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
     CsvWriter csv(o.out_dir, "load", meta);
-    auto hist = maybe_hist(o, meta, "load");
+    std::unique_ptr<CsvWriter> hist;
+    if (o.dump_histograms) hist = std::make_unique<CsvWriter>(o.out_dir, "load_hist", meta);
     struct V { size_t batch; bool append; };
     std::vector<V> variants = {
         {10000, false}
-        // {1000,   false},
-        // {10000,  true},
-        // {100000, true},
     };
     if (o.batch_size) variants = { {*o.batch_size, true} };
     for (auto& v : variants) {
@@ -179,74 +156,6 @@ void run_load_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
     }
 }
 
-void run_read_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta,
-                    const std::string& phase_name) {
-    CsvWriter csv(o.out_dir, phase_name, meta);
-    auto hist = maybe_hist(o, meta, phase_name);
-    struct V { KeyPattern pat; unsigned threads; bool cross_dbi; };
-    std::vector<V> variants = {
-        {KeyPattern::Random,   1,  false},
-        {KeyPattern::Random,   4,  false},
-        {KeyPattern::Random,  16,  false},
-        {KeyPattern::Zipfian,  8,  false},
-        {KeyPattern::Random,   8,  true},
-    };
-    if (o.threads) {
-        variants = { {KeyPattern::Random, *o.threads, false} };
-    }
-    for (auto& v : variants) {
-        ReadConfig cfg;
-        cfg.pattern        = v.pat;
-        cfg.thread_count   = v.threads;
-        cfg.cross_dbi      = v.cross_dbi;
-        cfg.ops_per_thread = o.ops.value_or(10'000'000);
-        run_point_reads(h, cfg, phase_name, csv, hist.get());
-    }
-}
-
-void run_mixed_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
-    CsvWriter wcsv(o.out_dir, "mixed_writer", meta);
-    CsvWriter rcsv(o.out_dir, "mixed_reader", meta);
-    auto hist = maybe_hist(o, meta, "mixed");
-    struct V { unsigned readers; unsigned wbatch; };
-    std::vector<V> variants = {
-        {0,  100},
-        {4,  100},
-        {8,  100},
-        {16, 100},
-        {8,   100},
-        {8, 100},
-    };
-    if (o.threads || o.batch_size) {
-        variants = { {o.threads.value_or(8), static_cast<unsigned>(o.batch_size.value_or(1000000))} };
-    }
-    for (auto& v : variants) {
-        MixedConfig cfg;
-        cfg.reader_threads  = v.readers;
-        cfg.writer_batch    = v.wbatch;
-        cfg.write_txns      = 1000;
-        cfg.cross_dbi_write = true;
-        run_mixed(h, cfg, wcsv, rcsv, hist.get());
-    }
-}
-
-void run_txn_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
-    CsvWriter csv(o.out_dir, "txn", meta);
-    for (bool atomic : {true, false}) {
-        TxnBenchConfig cfg;
-        cfg.atomic    = atomic;
-        cfg.txn_count = 10000000 / DBI_COUNT; // keep total work bounded
-        cfg.records_per_dbi_per_txn = 10;
-        run_txn_bench(h, cfg, csv);
-    }
-}
-
-void run_hotcold_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
-    CsvWriter csv(o.out_dir, "hotcold", meta);
-    HotColdConfig cfg;
-    run_hot_cold(h, cfg, csv);
-}
-
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -255,7 +164,7 @@ int main(int argc, char** argv) try {
     RunMeta meta = make_run_meta(o);
 
     std::cerr << "[mdbx_bench] run_id=" << o.run_id
-              << " phase=" << o.phase
+              << " phase=load"
               << " layout=" << o.layout
               << " db=" << o.db_path
               << " out=" << o.out_dir << "\n";
@@ -263,53 +172,7 @@ int main(int argc, char** argv) try {
     EnvHandle h = open_env(env_cfg);
     print_env_info(h);
 
-    auto run_one = [&](const std::string& p) {
-        if (p == "load")       run_load_phase(h, o, meta);
-        else if (p == "hot_read")  {run_warmup(h); run_read_phase(h, o, meta, "hot_read");}
-        else if (p == "cold_read") run_read_phase(h, o, meta, "cold_read");
-        else if (p == "mixed")     run_mixed_phase(h, o, meta);
-        else if (p == "txn")       run_txn_phase(h, o, meta);
-        else if (p == "hotcold")   run_hotcold_phase(h, o, meta);
-        else {
-            std::cerr << "unknown phase: " << p << "\n";
-            std::exit(2);
-        }
-    };
-
-    if (o.phase == "all") {
-        if (!o.no_load) run_load_phase(h, o, meta);
-        run_warmup(h);
-        run_read_phase(h, o, meta, "hot_read");
-
-        std::cerr << "\n=== Cold-read setup ===\n";
-        close_env(h);
-
-        // Actually drop OS page cache so cold_read is cold. Requires either
-        // running as root, or `sudo` configured for passwordless `tee` / sysctl.
-        // sync() flushes dirty pages so they can be dropped.
-        ::sync();
-        int dc = std::system("echo 3 | sudo -n tee /proc/sys/vm/drop_caches > /dev/null");
-        if (dc != 0) {
-            std::cerr << "[cold_read] WARNING: failed to drop caches (rc=" << dc
-                      << "). Cold reads will actually be warm. "
-                      << "Run as root or configure passwordless sudo for tee.\n";
-        } else {
-            std::cerr << "[cold_read] page cache dropped\n";
-        }
-
-        h = open_env(env_cfg);
-        run_read_phase(h, o, meta, "cold_read");
-
-        run_mixed_phase(h, o, meta);
-        run_txn_phase(h, o, meta);
-        run_hotcold_phase(h, o, meta);
-    } else {
-        if (o.phase != "load" && !o.no_load) {
-            // If the user asked for a non-load phase but the DB might be empty,
-            // do nothing here — they can pass --phase load separately.
-        }
-        run_one(o.phase);
-    }
+    run_load_phase(h, o, meta);
 
     print_env_info(h);
     close_env(h);

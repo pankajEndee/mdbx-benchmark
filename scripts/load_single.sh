@@ -3,7 +3,6 @@ set -euo pipefail
 BIN=./build/mdbx_bench
 OUTDIR=./results
 LAYOUT=single
-PHASE=load
 mkdir -p "$OUTDIR"
 
 DB_PATH="./bench_db_${LAYOUT}"
@@ -27,5 +26,4 @@ echo "=== Running: $run_id ===" >&2
     --run-id  "$run_id" \
     --sync-mode "$sync" \
     --writemap  "$wm" \
-    --layout    "$LAYOUT" \
-    --phase     "$PHASE"
+    --layout    "$LAYOUT"

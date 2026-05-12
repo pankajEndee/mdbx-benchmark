@@ -9,20 +9,6 @@ const std::unordered_map<std::string, std::vector<std::string>> PHASE_COLUMNS = 
     {"load",         {"dbi", "batch_size", "use_append", "total_records",
                       "elapsed_ms", "records_per_sec", "db_size_mb",
                       "commit_p50_us", "commit_p99_us"}},
-    {"hot_read",     {"pattern", "threads", "cross_dbi", "total_ops",
-                      "elapsed_ms", "ops_per_sec",
-                      "p50_us", "p95_us", "p99_us"}},
-    {"cold_read",    {"pattern", "threads", "cross_dbi", "total_ops",
-                      "elapsed_ms", "ops_per_sec",
-                      "p50_us", "p95_us", "p99_us"}},
-    {"mixed_writer", {"writer_batch", "reader_threads", "write_txns",
-                      "commits_per_sec", "p50_commit_us", "p99_commit_us"}},
-    {"mixed_reader", {"reader_threads", "writer_batch", "total_read_ops",
-                      "read_ops_per_sec", "p50_read_us", "p99_read_us"}},
-    {"txn",          {"atomic", "dbi_count", "records_per_dbi", "txn_count",
-                      "commits_per_sec", "p50_us", "p99_us"}},
-    {"hotcold",      {"sample_idx", "writer_txnid", "oldest_reader_txnid",
-                      "lag", "db_size_mb", "writer_p99_us"}},
 };
 
 static const std::vector<std::string> kCommonColumns = {
