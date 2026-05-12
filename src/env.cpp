@@ -52,12 +52,15 @@ EnvHandle open_env(const EnvConfig& cfg) {
     h.cfg = cfg;
 
     if (cfg.layout == EnvLayout::PerDbi) {
-        // Split requested map_size evenly across envs (round up).
+        // Default: split map_size evenly across envs (round up).
+        // Per-DBI overrides in cfg.dbi_map_sizes take precedence.
         size_t per_env_map = (cfg.map_size + DBI_COUNT - 1) / DBI_COUNT;
         h.envs.reserve(DBI_COUNT);
         for (size_t i = 0; i < DBI_COUNT; ++i) {
             std::string sub = cfg.path + "/" + SCHEMA[i].name;
-            h.envs.emplace_back(open_one(sub, cfg, per_env_map, /*max_maps=*/1));
+            auto it = cfg.dbi_map_sizes.find(SCHEMA[i].name);
+            size_t this_map = (it != cfg.dbi_map_sizes.end()) ? it->second : per_env_map;
+            h.envs.emplace_back(open_one(sub, cfg, this_map, /*max_maps=*/1));
 
             auto txn = h.envs.back().start_write();
             mdbx::key_mode km = mdbx::key_mode::usual;

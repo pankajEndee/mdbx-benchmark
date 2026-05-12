@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "mdbx.h++"
 #include "schema.hpp"
@@ -21,6 +22,8 @@ struct EnvConfig {
     bool         liforeclaim  = true;
     std::string  sync_mode    = "safe_nosync"; // default|safe_nosync|utterly_nosync
     EnvLayout    layout       = EnvLayout::Single;
+    // Per-DBI map size overrides (per_dbi layout only). Key = DBI name, value = bytes.
+    std::unordered_map<std::string, size_t> dbi_map_sizes;
 };
 
 struct EnvHandle {

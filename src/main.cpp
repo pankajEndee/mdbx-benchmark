@@ -36,6 +36,8 @@ struct CliOptions {
     std::optional<size_t>   ops;
     bool        no_load         = false;
     bool        dump_histograms = false;
+    // Per-DBI map size overrides for per_dbi layout: "name:size_gb"
+    std::vector<std::string> dbi_map_sizes;
 };
 
 void print_help() {
@@ -48,6 +50,9 @@ void print_help() {
         "  --run-id <string>         Tag written into the run_id column of every row.\n"
         "                            Default: auto-generated from sync-mode + writemap + timestamp.\n"
         "  --map-size-gb <n>         Default: 64\n"
+        "  --dbi-map-size-gb <name:n>  Per-DBI map size override for per_dbi layout.\n"
+        "                            Repeatable. E.g. --dbi-map-size-gb vectors:32\n"
+        "                            Unspecified DBIs fall back to even split of --map-size-gb.\n"
         "  --writemap <0|1>          Default: 1\n"
         "  --nordahead <0|1>         Default: 1\n"
         "  --liforeclaim <0|1>       Default: 1\n"
@@ -79,6 +84,7 @@ CliOptions parse_args(int argc, char** argv) {
         else if (a == "--out-dir")        o.out_dir = next_arg(i, argc, argv, "--out-dir");
         else if (a == "--run-id")         o.run_id  = next_arg(i, argc, argv, "--run-id");
         else if (a == "--map-size-gb")    o.map_size_gb = std::stoull(next_arg(i, argc, argv, "--map-size-gb"));
+        else if (a == "--dbi-map-size-gb") o.dbi_map_sizes.push_back(next_arg(i, argc, argv, "--dbi-map-size-gb"));
         else if (a == "--writemap")       o.writemap = std::stoi(next_arg(i, argc, argv, "--writemap"));
         else if (a == "--nordahead")      o.nordahead = std::stoi(next_arg(i, argc, argv, "--nordahead"));
         else if (a == "--liforeclaim")    o.liforeclaim = std::stoi(next_arg(i, argc, argv, "--liforeclaim"));
@@ -121,6 +127,17 @@ EnvConfig make_env_cfg(const CliOptions& o) {
     cfg.liforeclaim = (o.liforeclaim != 0);
     cfg.sync_mode   = o.sync_mode;
     cfg.layout      = (o.layout == "per_dbi") ? EnvLayout::PerDbi : EnvLayout::Single;
+    for (const auto& spec : o.dbi_map_sizes) {
+        auto colon = spec.find(':');
+        if (colon == std::string::npos) {
+            std::cerr << "invalid --dbi-map-size-gb value '" << spec
+                      << "': expected name:size_gb\n";
+            std::exit(2);
+        }
+        std::string name = spec.substr(0, colon);
+        size_t gb = std::stoull(spec.substr(colon + 1));
+        cfg.dbi_map_sizes[name] = gb * size_t(1024) * 1024 * 1024;
+    }
     return cfg;
 }
 
@@ -147,7 +164,7 @@ void run_load_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
     auto hist = maybe_hist(o, meta, "load");
     struct V { size_t batch; bool append; };
     std::vector<V> variants = {
-        {1,      false},
+        {100000, true}
         // {1000,   false},
         // {10000,  true},
         // {100000, true},
@@ -181,7 +198,7 @@ void run_read_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta,
         cfg.pattern        = v.pat;
         cfg.thread_count   = v.threads;
         cfg.cross_dbi      = v.cross_dbi;
-        cfg.ops_per_thread = o.ops.value_or(1'000);
+        cfg.ops_per_thread = o.ops.value_or(1'000'000);
         run_point_reads(h, cfg, phase_name, csv, hist.get());
     }
 }
@@ -192,15 +209,15 @@ void run_mixed_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
     auto hist = maybe_hist(o, meta, "mixed");
     struct V { unsigned readers; unsigned wbatch; };
     std::vector<V> variants = {
-        {0,  1},
-        {4,  1},
-        {8,  1},
-        {16, 1},
-        {8,   1},
-        {8, 1},
+        {0,  100},
+        {4,  100},
+        {8,  100},
+        {16, 100},
+        {8,   100},
+        {8, 100},
     };
     if (o.threads || o.batch_size) {
-        variants = { {o.threads.value_or(8), static_cast<unsigned>(o.batch_size.value_or(1000))} };
+        variants = { {o.threads.value_or(8), static_cast<unsigned>(o.batch_size.value_or(1000000))} };
     }
     for (auto& v : variants) {
         MixedConfig cfg;
@@ -217,7 +234,7 @@ void run_txn_phase(EnvHandle& h, const CliOptions& o, const RunMeta& meta) {
     for (bool atomic : {true, false}) {
         TxnBenchConfig cfg;
         cfg.atomic    = atomic;
-        cfg.txn_count = 1400 / DBI_COUNT; // keep total work bounded
+        cfg.txn_count = 10000000 / DBI_COUNT; // keep total work bounded
         cfg.records_per_dbi_per_txn = 10;
         run_txn_bench(h, cfg, csv);
     }
@@ -264,10 +281,10 @@ int main(int argc, char** argv) try {
 
         std::cerr << "\n=== Cold-read setup ===\n"
                      "To make the cold-read phase genuinely cold, run as root:\n"
-                     "    sync && echo 3 > /proc/sys/vm/drop_caches\n"
-                     "Press Enter to continue with cold reads...\n";
-        std::string line;
-        std::getline(std::cin, line);
+                     "    sync && echo 3 > /proc/sys/vm/drop_caches\n";
+        //              "Press Enter to continue with cold reads...\n";
+        // std::string line;
+        // std::getline(std::cin, line);
 
         close_env(h);
         h = open_env(env_cfg);

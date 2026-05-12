@@ -18,13 +18,13 @@ struct DBISpec
 };
 
 inline constexpr DBISpec SCHEMA[] = {
-    {"vectors", 4, 1540, MDBX_INTEGERKEY, 50'000},
-    {"meta", 4, 75, 0, 50'000},
-    {"id", 7, 4, 0, 50'000},
+    {"vectors", 4, 1540, MDBX_INTEGERKEY, 10'000'000},
+    {"meta", 4, 75, 0, 10'000'000},
+    {"id", 7, 4, 0, 10'000'000},
     {"filter_schema", 17, 48, 0, 5},
-    {"filter_numeric_inverted", 7, 10'000, 0, 14},
-    {"filter_numeric_forward", 10, 4, 0, 50'000},
-    {"filter_category", 16, 2, 0, 6}
+    {"filter_numeric_inverted", 7, 10'000, 0, 14000},
+    {"filter_numeric_forward", 10, 4, 0, 10'000'000},
+    {"filter_category", 16, 2, 0, 10}
 };
 inline constexpr size_t DBI_COUNT = sizeof(SCHEMA) / sizeof(SCHEMA[0]);
 

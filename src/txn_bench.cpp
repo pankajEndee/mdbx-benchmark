@@ -23,8 +23,7 @@ void write_dbi_records(EnvHandle& h, mdbx::txn_managed& txn,
         make_val(val_buf.data(), spec.val_size, seq);
         mdbx::slice k(key_buf, spec.key_size);
         mdbx::slice v(val_buf.data(), spec.val_size);
-        try { txn.upsert(h.dbis[dbi_idx], k, v); }
-        catch (const mdbx::exception&) {}
+        txn.upsert(h.dbis[dbi_idx], k, v);
     }
 }
 
@@ -65,7 +64,15 @@ void run_txn_bench(EnvHandle& h, const TxnBenchConfig& cfg, CsvWriter& csv) {
                                       val_buf, key_buf);
                 }
                 Timer ct;
-                for (auto& t : txns) t.commit();
+                try {
+                    for (auto& t : txns) t.commit();
+                } catch (...) {
+                    // Abort any txns that haven't been committed yet.
+                    for (auto& t : txns) {
+                        try { t.abort(); } catch (...) {}
+                    }
+                    throw;
+                }
                 commit_hist.record(ct.elapsed_ns());
             } else {
                 auto txn = h.envs[0].start_write();
