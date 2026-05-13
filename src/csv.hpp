@@ -37,7 +37,9 @@ private:
     std::string   phase_;
     RunMeta       meta_;
     bool          common_prefix_ = true;
+    bool          divider_pending_ = true; // emit "# === run_id ===" before first row
     void write_header_if_new(const std::filesystem::path& path);
+    void emit_divider_if_pending();
 };
 
 std::string iso8601_utc_now();

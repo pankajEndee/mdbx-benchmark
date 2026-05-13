@@ -42,6 +42,9 @@ struct EnvHandle {
 };
 
 EnvHandle open_env(const EnvConfig& cfg);
+// Opens existing env(s) read-only with MDBX_NOSTICKYTHREADS. DBIs are opened
+// (not created); fails if any DBI is missing on disk.
+EnvHandle open_env_readonly(const EnvConfig& cfg);
 void      close_env(EnvHandle& h);
 void      print_env_info(EnvHandle& h);
 void      print_dbi_stats(EnvHandle& h);

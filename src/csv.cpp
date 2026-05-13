@@ -9,6 +9,16 @@ const std::unordered_map<std::string, std::vector<std::string>> PHASE_COLUMNS = 
     {"load",         {"dbi", "batch_size", "use_append", "total_records",
                       "elapsed_ms", "records_per_sec", "db_size_mb",
                       "commit_p50_us", "commit_p99_us"}},
+    {"cold_reads",   {"threads", "cross_dbi", "reads_per_thread", "rep",
+                      "total_reads", "wall_time_ms", "throughput_rps",
+                      "latency_p50_ns", "latency_p95_ns", "latency_p99_ns",
+                      "latency_mean_ns", "latency_min_ns", "latency_max_ns",
+                      "checksum"}},
+    {"hot_reads",    {"threads", "cross_dbi", "reads_per_thread", "rep",
+                      "total_reads", "wall_time_ms", "throughput_rps",
+                      "latency_p50_ns", "latency_p95_ns", "latency_p99_ns",
+                      "latency_mean_ns", "latency_min_ns", "latency_max_ns",
+                      "checksum"}},
 };
 
 static const std::vector<std::string> kCommonColumns = {
@@ -94,7 +104,14 @@ void CsvWriter::write_raw_header(const std::vector<std::string>& columns) {
     out_.flush();
 }
 
+void CsvWriter::emit_divider_if_pending() {
+    if (!divider_pending_) return;
+    divider_pending_ = false;
+    out_ << "# === " << meta_.run_id << " ===\n";
+}
+
 void CsvWriter::write_raw_row(const std::vector<std::string>& values) {
+    emit_divider_if_pending();
     bool first = true;
     for (auto& v : values) {
         if (!first) out_ << ',';
@@ -112,6 +129,7 @@ void CsvWriter::write_row(const std::vector<std::string>& values) {
     if (values.size() != it->second.size())
         throw std::runtime_error("column count mismatch for phase " + phase_);
 
+    emit_divider_if_pending();
     out_ << csv_escape(meta_.run_id) << ','
          << csv_escape(meta_.timestamp_iso) << ','
          << csv_escape(meta_.sync_mode) << ','
